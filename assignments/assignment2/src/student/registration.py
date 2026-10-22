@@ -10,7 +10,8 @@ import numpy as np
 from data_types.nominal_types import vct3, Rot, Frame
 
 from assignments.assignment1.src.tracker import Tracker
-from ..simulation import PlacedBody
+from ..simulation import PlacedBody, sample_marker_bodies, most_recent_observed_markers, update_marker_body
+
 
 
 def register_points(a: List[vct3], b: List[vct3]) -> Frame:
@@ -65,4 +66,36 @@ def refine_marker_body(trk: Tracker, placed: PlacedBody, n_readings: int = 30) -
         n_readings - number of readings to average
     output: the new List[vct3] of marker positions (also stored on the body)
     """
-    raise NotImplementedError("TODO: implement refine_marker_body")
+
+    body = placed.body
+    layout = []
+    for a in body.nominal_marker_positions:
+        layout.append(vct3(a))
+
+    readings = []
+    for i in range(n_readings):
+        sample_marker_bodies(trk)       # single snapshot from tracker
+        b = most_recent_observed_markers(body)      # marker position in tracker frame
+        if b is None:           # skip if body was not visible
+            continue
+        F = register_points(layout, b)      # gets the transform from body frame to tracker frame
+        F_inv = F.inv()
+
+        # move each marker position back to the body frame
+        this_reading = []
+        for bk in b:
+            a = F_inv * bk
+            this_reading.append(np.array(a.vec).reshape(3))
+        readings.append(this_reading)
+
+    if len(readings) == 0:
+        raise RuntimeError("the body was never visible")
+
+    # average the readings and update the body
+    averages = np.mean(readings, axis=0)
+    new_layout = []
+    for row in averages:
+        new_layout.append(vct3(row[0], row[1], row[2]))
+
+    update_marker_body(body, new_layout)
+    return new_layout
