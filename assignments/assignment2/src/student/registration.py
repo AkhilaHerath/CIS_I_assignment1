@@ -16,7 +16,7 @@ from ..simulation import PlacedBody, sample_marker_bodies, most_recent_observed_
 
 def register_points(a: List[vct3], b: List[vct3]) -> Frame:
     """
-    TODO: implement (your own -- do not call the simulator's solver).
+    D TODO: implement (your own -- do not call the simulator's solver).
 
     Rigid point-set registration: find the least-squares Frame F such that
     F * a[i] ~= b[i] for every corresponding pair. Think about what happens
@@ -27,12 +27,56 @@ def register_points(a: List[vct3], b: List[vct3]) -> Frame:
         b - the same points observed in the target frame, same order
     output: Frame mapping a -> b
     """
-    raise NotImplementedError("TODO: implement register_points")
+
+    if len(a) != len(b):
+        raise ValueError("a and b must have the same number of points")
+    if len(a) < 3:
+        raise ValueError("need at least 3 points")
+
+    # turning the vct3 lists into numpy array -> each marker a,b becomes a row of A,B
+    A = []
+    for point in a:
+        A.append(np.array(point.vec).reshape(3))
+    B = []
+    for point in b:
+        B.append(np.array(point.vec).reshape(3))
+    A = np.array(A)
+    B = np.array(B)
+
+    # center of each set
+    a_mean = np.mean(A, axis=0)
+    b_mean = np.mean(B, axis=0)
+
+    # bring the center to the origin
+    A_c = A - a_mean
+    B_c = B - b_mean
+
+    '''
+    possibly needs a check to see if all the points are in a line
+    '''
+
+    # build H and get rotation using SVD
+    H = np.zeros((3,3))
+    for i in range(len(A_c)):
+        H = H + np.outer(B_c[i], A_c[i])
+    U, S, Vt = np.linalg.svd(H)     #h=USVt ->S is dropped so R=U*Vt
+    R = U @ Vt
+
+    # check if the rotation is a mirror image and fix
+    if np.linalg.det(R) < 0:    # +1 = real rotation; -1 = mirror image
+        U[:, 2] = -U[:, 2]
+        R = U @ Vt
+
+    # the translation -> b = Ra + p
+    p = b_mean - R @ a_mean
+
+    return Frame(Rot(matrix=R), vct3(p[0], p[1], p[2]))
+
 
 
 def average_frames(frames: List[Frame]) -> Frame:
     """
-    TODO: implement.
+    D TODO: implement. 
 
     Average of several noisy estimates of the same Frame. Rotations cannot
     simply be averaged element-wise -- the result must be a proper
@@ -42,12 +86,28 @@ def average_frames(frames: List[Frame]) -> Frame:
         frames - List[Frame], all estimates of the same transform
     output: the averaged Frame
     """
-    raise NotImplementedError("TODO: implement average_frames")
+    R_sum = np.zeros((3, 3))
+    p_sum = np.zeros(3)
+    for F in frames:
+        R_sum = R_sum + F.R.matrix
+        p_sum = p_sum + np.array(F.p.vec).reshape(3)
+
+    R_avg = R_sum / len(frames)
+    p_avg = p_sum / len(frames)
+
+    U, S, Vt = np.linalg.svd(R_avg)
+    R = U @ Vt
+    # mirror image check and fix
+    if np.linalg.det(R) < 0:
+        U[:, 2] = -U[:, 2]
+        R = U @ Vt
+    
+    return Frame(Rot(matrix=R), vct3(p_avg[0], p_avg[1], p_avg[2]))
 
 
 def refine_marker_body(trk: Tracker, placed: PlacedBody, n_readings: int = 30) -> List[vct3]:
     """
-    TODO: implement.
+    D TODO: implement.
 
     "It is possible to improve your estimate of a_m,k through a calibration
     process involving multiple observations of the marker body using the
