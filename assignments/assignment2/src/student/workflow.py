@@ -12,7 +12,8 @@ from data_types.nominal_types import vct3, Frame
 
 from ..robot import Robot
 from assignments.assignment1.src.tracker import Tracker
-from ..simulation import PlacedBody
+from ..simulation import PlacedBody, sample_marker_bodies, clock
+from .registration import average_frames
 
 
 @dataclass
@@ -34,7 +35,7 @@ class CalibrationData:
 
 def measure_home_offsets(rob: Robot, n_homings: int = 5) -> np.ndarray:
     """
-    TODO: implement.
+    D TODO: implement.
 
     HomeRobot() drives the robot to theta* = 0 and returns the encoder
     values there, i.e. -delta_theta_sys(home) - delta_theta_rnd. Repeat it
@@ -46,7 +47,14 @@ def measure_home_offsets(rob: Robot, n_homings: int = 5) -> np.ndarray:
         n_homings - how many homings to average
     output: estimated delta_theta_sys at home, np.ndarray of 6
     """
-    raise NotImplementedError("TODO: implement measure_home_offsets")
+
+    readings = []
+    for i in range(n_homings):
+        enc = rob.home_robot()
+        readings.append(enc)
+
+    avg = np.mean(readings, axis=0)
+    return -avg
 
 
 # this should contain a desired accuracy which will affect the number of calibration poses
@@ -86,7 +94,7 @@ def plan_calibration_poses(rob: Robot, trk: Tracker, mbee_local_positions: List[
 def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
                              thetas: List[np.ndarray], repeats: int = 1) -> CalibrationData:
     """
-    TODO: implement.
+    D TODO: implement.
 
     Visit each joint vector with rob.move_joints, read the calibration body
     with sample_marker_bodies and store its frame relative to the tracker.
@@ -101,12 +109,28 @@ def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
         repeats - readings per pose
     output: CalibrationData
     """
-    raise NotImplementedError("TODO: implement collect_calibration_data")
+    data = CalibrationData()
+    t_start = clock.elapsed     #simulation time atm
+    name = mbee_placed.body.name
+
+    for theta in thetas:
+        rob.move_joints(thetas)
+        for r in range(repeats):
+            results = sample_marker_bodies(trk)
+            obs = results[name]
+            if obs in None:
+                print("not visible at", theta)
+                continue
+            data.thetas.append(np.array(theta))
+            data.frames.append(obs.frame)
+
+    data.t_collect = clock.elapsed - t_start
+    return data
 
 
 def estimate_base_frame(data: CalibrationData, kins: Robot) -> Frame:
     """
-    TODO: implement.
+    D TODO: implement.
 
     With the calibration body's frame being exactly F_ee, every sample
     satisfies  F_ee,j = F_X * kins.fwd_kins(theta_j)  for one constant
@@ -119,4 +143,10 @@ def estimate_base_frame(data: CalibrationData, kins: Robot) -> Frame:
             ImprovedKinematics)
     output: F_X
     """
-    raise NotImplementedError("TODO: implement estimate_base_frame")
+    estimates = []
+    for i in range(len(data)):
+        F_ee = data.frames[i]
+        F_base_ee = kins.fwd_kins(data.thetas[i])
+        F_X = F_ee * F_base_ee.inv()      # F_ee = F_X * F_rob
+        estimates.append(F_X)
+    return average_frames(estimates)
