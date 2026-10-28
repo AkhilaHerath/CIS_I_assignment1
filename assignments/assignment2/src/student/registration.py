@@ -15,6 +15,7 @@ from ..simulation import PlacedBody, sample_marker_bodies, most_recent_observed_
 
 
 def register_points(a: List[vct3], b: List[vct3]) -> Frame:
+    # find the frame F that maps points a(body frame) onto points b(tracker frame)
     """
     D TODO: implement (your own -- do not call the simulator's solver).
 
@@ -75,6 +76,8 @@ def register_points(a: List[vct3], b: List[vct3]) -> Frame:
 
 
 def average_frames(frames: List[Frame]) -> Frame:
+    # gets a bunch of guesses for the base frame and then the functions averages
+    # them out and gets an average for the base frame
     """
     D TODO: implement. 
 
@@ -97,7 +100,7 @@ def average_frames(frames: List[Frame]) -> Frame:
 
     U, S, Vt = np.linalg.svd(R_avg)
     R = U @ Vt
-    
+
     # mirror image check and fix
     if np.linalg.det(R) < 0:
         U[:, 2] = -U[:, 2]
