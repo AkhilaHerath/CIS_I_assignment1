@@ -97,6 +97,7 @@ def average_frames(frames: List[Frame]) -> Frame:
 
     U, S, Vt = np.linalg.svd(R_avg)
     R = U @ Vt
+    
     # mirror image check and fix
     if np.linalg.det(R) < 0:
         U[:, 2] = -U[:, 2]

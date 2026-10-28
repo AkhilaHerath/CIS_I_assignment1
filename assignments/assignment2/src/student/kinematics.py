@@ -7,7 +7,7 @@ from typing import Dict, Optional
 import numpy as np
 
 from data_types.nominal_types import vct3, Rot, Frame
-from uncertainty_networks.se3 import log_so3
+from uncertainty_networks.se3 import log_so3, exp_so3
 
 from ..robot import Robot
 from .workflow import CalibrationData
@@ -49,6 +49,12 @@ class ImprovedKinematics(Robot):
         self.n_poly = n_poly      # e.g. the degree of a per-joint distortion polynomial
         self.params = self.initial_params()
 
+
+    # helper function that turns 6 nums into a small frame
+    def small_frame(xi):
+        R = exp_so3(xi[0:3])
+        p = vct3(xi[3], xi[4], xi[5])
+        return Frame(Rot(matric=R), p)
     # ------------------------------------------------------------------ parameterization
 
     def initial_params(self) -> np.ndarray:
@@ -60,7 +66,7 @@ class ImprovedKinematics(Robot):
                 layout in the class docstring that is simply
                 np.zeros(6 + 10 + 6 + 6 * self.n_poly)
         """
-        raise NotImplementedError("TODO: implement initial_params")
+        return np.zeros(6 + 10 + 6 + 6 * self.n_poly)
 
     def base_frame(self, params: Optional[np.ndarray] = None) -> Frame:
         """
@@ -70,7 +76,9 @@ class ImprovedKinematics(Robot):
                 self.params) -- e.g. F_X_init * Exp(params[0:6]), see
                 uFrame.perturb / uncertainty_networks.se3.exp_se3
         """
-        raise NotImplementedError("TODO: implement base_frame")
+        if params is None:
+            params = self.params
+        return self.F_X_init * small_frame(params[0:6])
 
     # ------------------------------------------------------------------ kinematics
 

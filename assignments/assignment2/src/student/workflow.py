@@ -88,7 +88,58 @@ def plan_calibration_poses(rob: Robot, trk: Tracker, mbee_local_positions: List[
         kwargs - whatever your design needs (grid sizes, margins, ...)
     output: ordered List of joint vectors (np.ndarray of 6)
     """
-    raise NotImplementedError("TODO: implement plan_calibration_poses")
+    n_markers = len(mbee_local_positions)
+    spread = 0.0
+    for a in mbee_local_positions:
+        size = np.linalg.norm(np.array(a.vec).reshape(3))
+        if size > spread:
+            spread = size
+
+    noise = 0.1
+    sigma_one = noise / (spread * np.sqrt(n_markers/2))
+    n_read = int(np.ceil((sigma_one / (desired_accuracy / 3)) ** 2))
+    if n_read < 1:
+        n_read =1
+
+    n_stops = kwargs.get("n_stops", 7)
+    wrist_range = kwargs.get("wrist_range", [1.3, 1.3, 2.0])
+
+    home = np.zeros(6)
+    center = np.array([300.0, 0.0, 300.0, 0.0, 0.0, 0.0])
+
+    targets = [home]
+    for k in range(3):
+        for value in np.linspace(rob.theta_min[k], rob.theta_max[k], n_stops):
+            theta = home.copy()
+            theta[k] = value
+            targets.append(theta)
+        targets.append(home)
+
+    targets.append(center)
+    for k in range(3, 6):
+        r = wrist_range[k - 3]
+        for value in np.linspace(-r, r, n_stops):
+            theta = center.copy()
+            theta[k] = value
+            targets.append(theta)
+        targets.append(center)
+
+    poses = []
+    for theta in targets:
+        F_world_ee = rob.F_rob * rob.fwd_kins(theta)
+        markers = []
+        for a in mbee_local_positions:
+            markers.append(F_world_ee * a)
+        if not trk.is_visible(markers):
+            print("skipping, not visible:", theta)
+            continue
+        for r in range(n_read):
+            poses.append(theta)
+    return poses
+
+
+
+
 
 
 def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
@@ -114,11 +165,11 @@ def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
     name = mbee_placed.body.name
 
     for theta in thetas:
-        rob.move_joints(thetas)
+        rob.move_joints(theta)
         for r in range(repeats):
             results = sample_marker_bodies(trk)
             obs = results[name]
-            if obs in None:
+            if obs is None:
                 print("not visible at", theta)
                 continue
             data.thetas.append(np.array(theta))
