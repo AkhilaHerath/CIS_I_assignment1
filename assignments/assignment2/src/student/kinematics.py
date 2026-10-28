@@ -93,7 +93,16 @@ class ImprovedKinematics(Robot):
                 error model (joint offsets + distortion, tilted axes, tool
                 frame offset) applied
         """
-        raise NotImplementedError("TODO: implement ImprovedKinematics.fwd_kins")
+        if params is None:
+            params = self.params
+        theta = np.asarray(theta, dtype=np.float64).reshape(6)
+
+        # joint correction theta* = theta + ofset + c1*x + c2*x^2
+        
+
+    scale = np.maximum(np.abs(self.theta_min), np.abs(self.theta_max))
+    theta_star = np.zeros(6)
+
 
     def predict_in_tracker(self, theta, params: Optional[np.ndarray] = None) -> Frame:
         """The end-effector pose in the tracker frame: base_frame * fwd_kins."""
