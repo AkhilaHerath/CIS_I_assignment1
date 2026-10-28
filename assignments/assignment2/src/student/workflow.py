@@ -2,6 +2,8 @@
 Data-collection workflow: which robot poses to visit, how to read them, and
 how to register the robot base to the tracker.
 """
+from .. import simulation
+from . import registration
 
 from dataclasses import dataclass, field
 from typing import List
@@ -12,8 +14,7 @@ from data_types.nominal_types import vct3, Frame
 
 from ..robot import Robot
 from assignments.assignment1.src.tracker import Tracker
-from ..simulation import PlacedBody, sample_marker_bodies, clock
-from .registration import average_frames
+from ..simulation import PlacedBody
 
 
 @dataclass
@@ -35,7 +36,7 @@ class CalibrationData:
 
 def measure_home_offsets(rob: Robot, n_homings: int = 5) -> np.ndarray:
     """
-    D TODO: implement.
+    TODO: implement.
 
     HomeRobot() drives the robot to theta* = 0 and returns the encoder
     values there, i.e. -delta_theta_sys(home) - delta_theta_rnd. Repeat it
@@ -48,13 +49,17 @@ def measure_home_offsets(rob: Robot, n_homings: int = 5) -> np.ndarray:
     output: estimated delta_theta_sys at home, np.ndarray of 6
     """
 
-    readings = []
-    for i in range(n_homings):
-        enc = rob.home_robot()
-        readings.append(enc)
+    if n_homings < 1:
+        raise ValueError("n_homings must be at least 1.")
 
-    avg = np.mean(readings, axis=0)
-    return -avg
+    readings = []
+
+    for _ in range(n_homings):
+        readings.append(rob.home_robot().copy())
+
+    return -np.mean(readings, axis=0)
+
+    raise NotImplementedError("TODO: implement measure_home_offsets")
 
 
 # this should contain a desired accuracy which will affect the number of calibration poses
@@ -88,13 +93,108 @@ def plan_calibration_poses(rob: Robot, trk: Tracker, mbee_local_positions: List[
         kwargs - whatever your design needs (grid sizes, margins, ...)
     output: ordered List of joint vectors (np.ndarray of 6)
     """
+
+    if not np.isfinite(desired_accuracy) or desired_accuracy <= 0:
+        raise ValueError("desired_accuracy must be positive and finite.")
+
+    # Approximate random orientation-noise budget.
+    # Replace 75 mm with a layout-based effective spread if available.
+    sigma_marker = 0.1       # mm
+    effective_spread = 75.0  # mm
+    angular_noise_budget = 0.5 * desired_accuracy
+
+    n_readings = max(
+        1,
+        int(np.ceil(
+            (sigma_marker /
+             (effective_spread * angular_noise_budget)) ** 2
+        ))
+    )
+
+    # Initial sampling density, scaled with requested accuracy.
+    # These spacings are design starting points, not an accuracy guarantee.
+    density = max(1.0, 1e-3 / desired_accuracy)
+    n_linear = int(np.ceil(6 * density)) + 1
+    n_wrist = int(np.ceil(6 * density)) + 1
+
+    home = np.zeros(6)
+    center = np.array([300., 0., 300., 0., 0., 0.])
+    poses = []
+
+    def visible(theta):
+        F_ee_world = rob.F_rob * rob.fwd_kins(theta)
+        markers_world = [
+            F_ee_world * a for a in mbee_local_positions
+        ]
+        return trk.is_visible(markers_world)
+
+    def add_pose(theta):
+        theta = np.asarray(theta, dtype=float).reshape(6)
+
+        if not visible(theta):
+            raise ValueError(
+                f"Planned pose is not nominally visible: {theta}"
+            )
+
+        # Consecutive duplicates cause move + sample on each repetition.
+        poses.extend(theta.copy() for _ in range(n_readings))
+
+    # Linear-axis sweeps with the other joints at home.
+    linear_ranges = [
+        (0.0, 600.0),
+        (-300.0, 300.0),
+        (0.0, 600.0),
+    ]
+
+    for joint, (low, high) in enumerate(linear_ranges):
+        add_pose(home)
+
+        for value in np.linspace(low, high, n_linear):
+            theta = home.copy()
+            theta[joint] = value
+            add_pose(theta)
+
+        add_pose(home)
+
+    # Wrist sweeps at the center of the translational work volume.
+    # Sweep monotonically to limit slow wrist travel.
+    wrist_ranges = [
+        (-0.75 * np.pi, 0.75 * np.pi),
+        (-0.75 * np.pi, 0.75 * np.pi),
+        (-np.pi, np.pi),
+    ]
+
+    for joint, (low, high) in enumerate(wrist_ranges, start=3):
+        add_pose(center)
+
+        for value in np.linspace(low, high, n_wrist):
+            theta = center.copy()
+            theta[joint] = value
+            add_pose(theta)
+
+        add_pose(center)
+        add_pose(home)
+
+    # Additional wrist configurations to help constrain coupled geometry.
+    for angles in [
+        (0.8, 0.8, 0.8),
+        (0.8, -0.8, -0.8),
+        (-0.8, -0.8, 0.8),
+        (-0.8, 0.8, -0.8),
+    ]:
+        theta = center.copy()
+        theta[3:] = angles
+        add_pose(theta)
+
+    add_pose(home)
+    return poses
     raise NotImplementedError("TODO: implement plan_calibration_poses")
 
 
 def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
                              thetas: List[np.ndarray], repeats: int = 1) -> CalibrationData:
     """
-    D TODO: implement.
+    TODO: implement.
 
     Visit each joint vector with rob.move_joints, read the calibration body
     with sample_marker_bodies and store its frame relative to the tracker.
@@ -109,28 +209,43 @@ def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
         repeats - readings per pose
     output: CalibrationData
     """
+    if repeats < 1:
+        raise ValueError("repeats must be at least 1.")
+
     data = CalibrationData()
-    t_start = clock.elapsed     #simulation time atm
-    name = mbee_placed.body.name
+    t_start = simulation.clock.elapsed
 
     for theta in thetas:
-        rob.move_joints(thetas)
-        for r in range(repeats):
-            results = sample_marker_bodies(trk)
-            obs = results[name]
-            if obs in None:
-                print("not visible at", theta)
-                continue
-            data.thetas.append(np.array(theta))
-            data.frames.append(obs.frame)
+        theta = np.asarray(theta, dtype=float).reshape(6)
 
-    data.t_collect = clock.elapsed - t_start
+        # Move once per pose.
+        rob.move_joints(theta)
+
+        # Take repeated tracker readings without moving again.
+        for _ in range(repeats):
+            simulation.sample_marker_bodies(trk)
+
+            F_obs = simulation.most_recent_observed_frame(
+                mbee_placed.body
+            )
+
+            if F_obs is None:
+                raise ValueError(
+                    f"Calibration body was not observed at pose {theta}."
+                )
+
+            data.thetas.append(theta.copy())
+            data.frames.append(F_obs)
+
+    data.t_collect = simulation.clock.elapsed - t_start
+
     return data
+    raise NotImplementedError("TODO: implement collect_calibration_data")
 
 
 def estimate_base_frame(data: CalibrationData, kins: Robot) -> Frame:
     """
-    D TODO: implement.
+    TODO: implement.
 
     With the calibration body's frame being exactly F_ee, every sample
     satisfies  F_ee,j = F_X * kins.fwd_kins(theta_j)  for one constant
@@ -143,10 +258,19 @@ def estimate_base_frame(data: CalibrationData, kins: Robot) -> Frame:
             ImprovedKinematics)
     output: F_X
     """
-    estimates = []
-    for i in range(len(data)):
-        F_ee = data.frames[i]
-        F_base_ee = kins.fwd_kins(data.thetas[i])
-        F_X = F_ee * F_base_ee.inv()      # F_ee = F_X * F_rob
-        estimates.append(F_X)
-    return average_frames(estimates)
+
+    if len(data) == 0:
+        raise ValueError("At least one observation is required.")
+
+    if len(data.thetas) != len(data.frames):
+        raise ValueError("Each joint vector must have a matching frame.")
+
+    base_estimates = []
+
+    for theta, F_obs in zip(data.thetas, data.frames):
+        F_nom = kins.fwd_kins(theta)
+        F_X_j = F_obs * F_nom.inv()
+        base_estimates.append(F_X_j)
+
+    return registration.average_frames(base_estimates)
+    raise NotImplementedError("TODO: implement estimate_base_frame")

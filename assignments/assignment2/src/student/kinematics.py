@@ -5,6 +5,8 @@ The calibrated kinematic model: ImprovedFwdKins / ImprovedInvKins.
 from typing import Dict, Optional
 
 import numpy as np
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
 
 from data_types.nominal_types import vct3, Rot, Frame
 from uncertainty_networks.se3 import log_so3
@@ -15,7 +17,14 @@ from .workflow import CalibrationData
 
 class ImprovedKinematics(Robot):
     """
-    TODO: implement -- the core deliverable.
+    Polynomial calibration with measured home offsets and a fixed base-roll gauge.
+    Pose corrections use [rotation vector; translation], not SE(3) twist coordinates.
+    Parameter 6 is fixed to zero during fitting. Zero parameters reproduce nominal
+    kinematics only when joint_offsets is zero.
+    Polynomial distortion is an approximation; validate on unseen poses. No
+    simulator truth or simulated motion is used during fitting.
+
+    Original parameter-layout guidance (Exp below means the chart described above):
 
     A Robot whose fwd_kins / inv_kins account for the calibrated error
     model. You choose the parameterization; the handout's error model is
@@ -46,8 +55,25 @@ class ImprovedKinematics(Robot):
                          robot.t_settle, robot.theta_dot_max, robot.theta_ddot_max)
         self.F_X_init = F_X_init  # starting estimate of the base frame (from the nominal fit)
         self.joint_offsets = np.zeros(6) if joint_offsets is None else np.asarray(joint_offsets, dtype=np.float64).reshape(6)
-        self.n_poly = n_poly      # e.g. the degree of a per-joint distortion polynomial
+        self.n_poly = int(n_poly)      # e.g. the degree of a per-joint distortion polynomial
+        if self.n_poly < 1:
+            raise ValueError("n_poly must be at least 1")
+        self.joint_offsets = self.joint_offsets.copy()
+        self.scales = np.maximum(np.maximum(abs(self.theta_min), abs(self.theta_max)), 1.0)
+        self.nominal_axes = np.array([a.vec.ravel() for a in robot.AXES], dtype=float)
+        self.tangents = []
+        for axis in self.nominal_axes[1:]:
+            axis = axis / np.linalg.norm(axis)
+            e = np.eye(3)[np.argmin(abs(axis))]
+            u = e - axis * (axis @ e)
+            u /= np.linalg.norm(u)
+            self.tangents.append(np.column_stack((u, np.cross(axis, u))))
         self.params = self.initial_params()
+        # Gauge: fix rotation about d1 by fixing d2's out-of-xy tilt.
+        # For the supplied Cartesian axes this is parameter 6.
+        self.active = np.delete(np.arange(len(self.params)), 6)
+        self.rotation_scale = 1e-3  # rad: target-based weighting, not a noise estimate
+        self.position_scale = 0.2   # mm
 
     # ------------------------------------------------------------------ parameterization
 
@@ -60,7 +86,7 @@ class ImprovedKinematics(Robot):
                 layout in the class docstring that is simply
                 np.zeros(6 + 10 + 6 + 6 * self.n_poly)
         """
-        raise NotImplementedError("TODO: implement initial_params")
+        return np.zeros(22 + 6 * self.n_poly)
 
     def base_frame(self, params: Optional[np.ndarray] = None) -> Frame:
         """
@@ -70,7 +96,8 @@ class ImprovedKinematics(Robot):
                 self.params) -- e.g. F_X_init * Exp(params[0:6]), see
                 uFrame.perturb / uncertainty_networks.se3.exp_se3
         """
-        raise NotImplementedError("TODO: implement base_frame")
+        p = self.params if params is None else np.asarray(params, dtype=float)
+        return self.F_X_init * self._correction(p[:6])
 
     # ------------------------------------------------------------------ kinematics
 
@@ -85,7 +112,19 @@ class ImprovedKinematics(Robot):
                 error model (joint offsets + distortion, tilted axes, tool
                 frame offset) applied
         """
-        raise NotImplementedError("TODO: implement ImprovedKinematics.fwd_kins")
+        p = self.params if params is None else np.asarray(params, dtype=float)
+        theta = np.asarray(theta, dtype=float).reshape(6)
+        powers = (theta / self.scales)[:, None] ** np.arange(1, self.n_poly + 1)
+        corrected = theta + self.joint_offsets + np.sum(
+            p[22:].reshape(6, self.n_poly) * powers, axis=1)
+        axes, _ = self._axes(p)
+        translation = corrected[:3] @ axes[:3]
+        R = np.eye(3)
+        for k in range(3, 6):
+            R = R @ Rotation.from_rotvec(axes[k] * corrected[k]).as_matrix()
+        return (Frame(Rot(), vct3(*translation)) * self.F_CW
+                * Frame(self._rotation(R), vct3()) * self.F_WE
+                * self._correction(p[16:22]))
 
     def predict_in_tracker(self, theta, params: Optional[np.ndarray] = None) -> Frame:
         """The end-effector pose in the tracker frame: base_frame * fwd_kins."""
@@ -157,7 +196,14 @@ class ImprovedKinematics(Robot):
                 params) with data.frames[j] for every sample (choose how to
                 weigh rotation vs translation)
         """
-        raise NotImplementedError("TODO: implement residuals")
+        if len(data.thetas) != len(data.frames) or not len(data.thetas):
+            raise ValueError("Expected nonempty, paired joint vectors and frames")
+        result = []
+        for theta, observed in zip(data.thetas, data.frames):
+            delta = observed.inv() * self.predict_in_tracker(theta, params)
+            result.extend(log_so3(delta.R.matrix) / self.rotation_scale)
+            result.extend(delta.p.vec.ravel() / self.position_scale)
+        return np.asarray(result)
 
     def fit(self, data: CalibrationData, **kwargs):
         """
@@ -167,7 +213,27 @@ class ImprovedKinematics(Robot):
         allowed). Must set self.params. Return whatever diagnostics you want
         to report (final cost, iterations, ...).
         """
-        raise NotImplementedError("TODO: implement fit")
+        start = self.params.copy()
+        start[6] = 0.0
+
+        def unpack(x):
+            p = start.copy()
+            p[self.active] = x
+            return p
+
+        kwargs.setdefault("x_scale", "jac")
+        kwargs.setdefault("max_nfev", 500)
+        result = least_squares(
+            lambda x: self.residuals(unpack(x), data),
+            start[self.active], **kwargs)
+        if not np.all(np.isfinite(result.x)):
+            raise ValueError("Fit returned nonfinite parameters")
+        self.params = unpack(result.x)
+        self.fit_result = result
+        return dict(success=bool(result.success), message=result.message,
+                    cost=float(result.cost), nfev=result.nfev,
+                    optimality=float(result.optimality),
+                    n_params=len(self.active))
 
     def jacobian_rank_report(self, data: CalibrationData, params: Optional[np.ndarray] = None) -> dict:
         """
@@ -178,7 +244,30 @@ class ImprovedKinematics(Robot):
         determined). Use it to justify your parameterization and your
         choice of calibration poses in the report.
         """
-        raise NotImplementedError("TODO: implement jacobian_rank_report")
+        p = (self.params if params is None else np.asarray(params, dtype=float)).copy()
+        # Scale columns by characteristic physical parameter changes.
+        scales = np.ones(len(p))
+        scales[:3] = scales[6:19] = 0.01
+        scales[3:6] = scales[19:22] = 1.0
+        scales[22:] = np.repeat(
+            np.array([1., 1., 1., .01, .01, .01]), self.n_poly)
+        J = np.empty((len(self.residuals(p, data)), len(self.active)))
+        h = 1e-4
+        for col, k in enumerate(self.active):
+            plus, minus = p.copy(), p.copy()
+            plus[k] += h * scales[k]
+            minus[k] -= h * scales[k]
+            J[:, col] = (self.residuals(plus, data) -
+                         self.residuals(minus, data)) / (2 * h)
+        _, singular, Vt = np.linalg.svd(J, full_matrices=True)
+        threshold = singular[0] * 1e-6 if singular.size else 0.
+        rank = int(np.sum(singular > threshold))
+        return dict(rank=rank, n_params=len(self.active),
+                    singular_values=singular, threshold=threshold,
+                    active_indices=self.active.copy(),
+                    parameter_scales=scales[self.active],
+                    weak_directions_scaled=Vt[rank:],
+                    gauge="parameter 6 fixed: d2 remains in base xy plane")
 
     # ------------------------------------------------------------------ reporting
 
@@ -194,4 +283,36 @@ class ImprovedKinematics(Robot):
         tool-frame offset. Note which of these are only defined up to the
         base-frame gauge (and so are better compared as angles between axes).
         """
-        raise NotImplementedError("TODO: implement parameters_report")
+        axes, tilts = self._axes(self.params)
+        angles = np.degrees(np.arccos(np.clip(axes @ axes.T, -1., 1.)))
+        coefficients = self.params[22:].reshape(6, self.n_poly)
+        return dict(unit_axes=axes, axis_tilt_vectors=tilts,
+                    axis_angles_deg=angles,
+                    joint_offset=self.joint_offsets.copy(),
+                    joint_scale=1. + coefficients[:, 0] / self.scales,
+                    distortion_coefficients=coefficients.copy(),
+                    polynomial_scales=self.scales.copy(),
+                    tool_frame_offset=self._correction(self.params[16:22]),
+                    base_frame=self.base_frame(),
+                    gauge="d1 fixed; d2 constrained to base xy plane")
+
+    @staticmethod
+    def _rotation(matrix):
+        # Convert through the known Rot(axis-name, angle) interface.
+        # Intrinsic XYZ gives Rx(a) Ry(b) Rz(c).
+        a, b, c = Rotation.from_matrix(matrix).as_euler("XYZ")
+        return Rot("x", a) * Rot("y", b) * Rot("z", c)
+
+    @classmethod
+    def _correction(cls, xi):
+        # Rotation-vector + independent translation chart, NOT an SE(3) twist.
+        return Frame(cls._rotation(Rotation.from_rotvec(xi[:3]).as_matrix()),
+                     vct3(*xi[3:6]))
+
+    def _axes(self, params):
+        axes = self.nominal_axes.copy()
+        tilts = np.zeros((6, 3))
+        for k in range(1, 6):
+            tilts[k] = self.tangents[k - 1] @ params[6 + 2*(k-1):8 + 2*(k-1)]
+            axes[k] = Rotation.from_rotvec(tilts[k]).apply(axes[k])
+        return axes, tilts
