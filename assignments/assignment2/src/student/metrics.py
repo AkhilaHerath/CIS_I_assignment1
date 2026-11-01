@@ -30,8 +30,8 @@ def frame_error(F_a: Frame, F_b: Frame) -> Tuple[float, float]:
 
     R = dF.R.matrix
     c = (np.trace(R) - 1) / 2       #arccos(theta) = ((trace of rot)-1)/2
-    c = np.clip(c, -1.0, 1.0)       # keeps cos in the range of -1,1 
-    angle_rad = np.arccos(c)
+    s = np.linalg.norm([R[2,1]-R[1,2], R[0,2]-R[2,0], R[1,0]-R[0,1]])/2     # R[1,0] − R[0,1] = sin θ − (−sin θ) = 2 sin θ ---> div by 2 gives sin
+    angle_rad = np.arctan2(s, c)
 
     return float(angle_rad), float(dist_mm)
 
@@ -56,7 +56,7 @@ def summarize_errors(errors: Sequence[Tuple[float, float]]) -> Dict[str, float]:
 
     summary = {}
     summary["n"] = len(errors)
-    summary["rms_angles"] = float(np.sqrt(np.mean(angles ** 2)))
+    summary["rms_angle"] = float(np.sqrt(np.mean(angles ** 2)))
     summary["max_angle"] = float(np.max(angles))
     summary["rms_pos"] = float(np.sqrt(np.mean(dists ** 2)))
     summary["max_pos"] = float(np.max(dists))

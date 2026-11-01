@@ -300,8 +300,9 @@ class ImprovedKinematics(Robot):
     def _rotation(matrix):
         # Convert through the known Rot(axis-name, angle) interface.
         # Intrinsic XYZ gives Rx(a) Ry(b) Rz(c).
-        a, b, c = Rotation.from_matrix(matrix).as_euler("XYZ")
-        return Rot("x", a) * Rot("y", b) * Rot("z", c)
+        # a, b, c = Rotation.from_matrix(matrix).as_euler("XYZ")
+        # return Rot("x", a) * Rot("y", b) * Rot("z", c)
+        return Rot(matrix=np.array(matrix, dtype=float))
 
     @classmethod
     def _correction(cls, xi):
