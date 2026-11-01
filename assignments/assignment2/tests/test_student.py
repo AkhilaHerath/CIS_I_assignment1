@@ -109,7 +109,20 @@ def test_estimate_base_frame_on_synthetic_data():
 
 def test_planned_poses_are_visible_and_within_limits():
     """TODO: write this test for your plan_calibration_poses."""
-    pytest.skip("TODO")
+    rob = simulation.create_robot("rob", Frame.eye(), seed=0)
+    trk = simulation.create_tracker("trk", Frame(Rot('x', np.pi), vct3(900, 0, 1900)), seed=0)
+    markers = [vct3(70, 0, 0), vct3(-70, 0, 0), vct3(0, 70, 0), vct3(0, -70, 0), vct3(0, 0, 70), vct3(0, 0, -70)]
+    poses = workflow.plan_calibration_poses(rob, trk, markers, desired_accuracy=1e-3)
+    assert len(poses) > 0
+
+    for theta in poses:
+        assert len(theta) == 6
+        assert rob.within_limits(theta)
+        F_world_ee = rob.F_rob * rob.fwd_kins(theta)
+        markers_world = []
+        for a in markers:
+            markers_world.append(F_world_ee * a)
+        assert trk.is_visible(markers_world)
 
 
 def test_measure_home_offsets_matches_encoders():
@@ -158,4 +171,30 @@ def test_fit_recovers_synthetic_parameters():
     the parameters themselves need not match if your model has a null
     direction -- compare poses, not parameters.
     """
-    pytest.skip("TODO")
+    rob = simulation.create_robot("rob", Frame.eye(), seed=0)
+    F_X = Frame(Rot('x', np.pi), vct3(900, 0, 1900))
+    rng = np.random.default_rng(10)
+
+    # true model with known small errors
+    truth = kinematics.ImprovedKinematics(rob, F_X)
+    true_params = 1e-3 * rng.normal(size=truth.params.shape)
+    true_params[6] = 0.0
+    truth.params = true_params
+
+    # fake measurements from the true model
+    data = workflow.CalibrationData()
+    for i in range(60):
+        theta = random_theta(rng)
+        data.thetas.append(theta)
+        data.frames.append(truth.predict_in_tracker(theta))
+
+    # fit a fresh model starting from zero
+    model = kinematics.ImprovedKinematics(rob, F_X)
+    model.fit(data)
+
+    # on new poses, the fitted model should pedit the smae as the true one
+    for i in range(10):
+        theta = random_theta(rng)
+        angle, dist = metrics.frame_error(truth.predict_in_tracker(theta), model.predict_in_tracker(theta))
+        assert angle < 1e-8 
+        assert dist < 1e-6
