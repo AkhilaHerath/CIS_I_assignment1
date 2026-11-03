@@ -1,0 +1,12 @@
+===== RESULTS FOR SEED 5 =====
+Baseline: 10 samples in 83.8 s
+Baseline nominal residuals: {'n': 10, 'rms_angle': 0.009102242481543468, 'max_angle': 0.0197240110705043, 'rms_pos': 3.3145057049476434, 'max_pos': 6.236259831766038}
+Calibration data: 496 readings over 42 distinct poses, collected in 546.6 s
+Fit: {'success': True, 'message': '`xtol` termination condition is satisfied.', 'cost': 396.5757357787708, 'nfev': 19, 'optimality': 0.10337354052535375, 'n_params': 33}
+Jacobian rank: 33 / 33
+Total calibration time: 630.8 s
+Forward, nominal: max 13.710 mm, rms 6.553 mm, max 0.06460 rad, rms 0.03791 rad
+Forward, improved: max 0.115 mm, rms 0.072 mm, max 0.00034 rad, rms 0.00018 rad
+Inverse, nominal: max 12.234 mm, rms 6.098 mm, max 0.05775 rad, rms 0.03618 rad
+Inverse, improved: max 0.099 mm, rms 0.071 mm, max 0.00047 rad, rms 0.00025 rad
+Testing time: 1057.5 s

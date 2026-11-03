@@ -1,0 +1,12 @@
+===== RESULTS FOR SEED 1 =====
+Baseline: 10 samples in 83.8 s
+Baseline nominal residuals: {'n': 10, 'rms_angle': 0.007991638492399348, 'max_angle': 0.01904315341501262, 'rms_pos': 2.9489389782831186, 'max_pos': 5.012299737528439}
+Calibration data: 496 readings over 42 distinct poses, collected in 546.6 s
+Fit: {'success': True, 'message': '`ftol` termination condition is satisfied.', 'cost': 416.69151388975206, 'nfev': 15, 'optimality': 0.08029296811218956, 'n_params': 33}
+Jacobian rank: 33 / 33
+Total calibration time: 630.8 s
+Forward, nominal: max 14.709 mm, rms 6.199 mm, max 0.05530 rad, rms 0.03280 rad
+Forward, improved: max 0.125 mm, rms 0.079 mm, max 0.00031 rad, rms 0.00018 rad
+Inverse, nominal: max 11.888 mm, rms 6.558 mm, max 0.05527 rad, rms 0.03440 rad
+Inverse, improved: max 0.114 mm, rms 0.078 mm, max 0.00053 rad, rms 0.00026 rad
+Testing time: 1057.9 s

@@ -59,9 +59,6 @@ def measure_home_offsets(rob: Robot, n_homings: int = 5) -> np.ndarray:
 
     return -np.mean(readings, axis=0)
 
-    raise NotImplementedError("TODO: implement measure_home_offsets")
-
-
 # this should contain a desired accuracy which will affect the number of calibration poses
 def plan_calibration_poses(rob: Robot, trk: Tracker, mbee_local_positions: List[vct3], desired_accuracy: float, **kwargs) -> List[np.ndarray]:
     """
@@ -188,8 +185,6 @@ def plan_calibration_poses(rob: Robot, trk: Tracker, mbee_local_positions: List[
 
     add_pose(home)
     return poses
-    raise NotImplementedError("TODO: implement plan_calibration_poses")
-
 
 def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
                              thetas: List[np.ndarray], repeats: int = 1) -> CalibrationData:
@@ -223,24 +218,19 @@ def collect_calibration_data(rob: Robot, trk: Tracker, mbee_placed: PlacedBody,
 
         # Take repeated tracker readings without moving again.
         for _ in range(repeats):
-            simulation.sample_marker_bodies(trk)
+            simulation.sample_marker_bodies(trk)        # camera snapshot
 
-            F_obs = simulation.most_recent_observed_frame(
-                mbee_placed.body
-            )
+            F_obs = simulation.most_recent_observed_frame(mbee_placed.body)     # body's frame fromt the snapshot
 
             if F_obs is None:
-                raise ValueError(
-                    f"Calibration body was not observed at pose {theta}."
-                )
+                raise ValueError(f"Calibration body was not observed at pose {theta}.")
 
             data.thetas.append(theta.copy())
             data.frames.append(F_obs)
 
-    data.t_collect = simulation.clock.elapsed - t_start
+    data.t_collect = simulation.clock.elapsed - t_start     # time rn - start time
 
     return data
-    raise NotImplementedError("TODO: implement collect_calibration_data")
 
 
 def estimate_base_frame(data: CalibrationData, kins: Robot) -> Frame:
@@ -268,9 +258,8 @@ def estimate_base_frame(data: CalibrationData, kins: Robot) -> Frame:
     base_estimates = []
 
     for theta, F_obs in zip(data.thetas, data.frames):
-        F_nom = kins.fwd_kins(theta)
-        F_X_j = F_obs * F_nom.inv()
+        F_nom = kins.fwd_kins(theta)        # tool relative to the base
+        F_X_j = F_obs * F_nom.inv()         # one guess of the base frame
         base_estimates.append(F_X_j)
 
-    return registration.average_frames(base_estimates)
-    raise NotImplementedError("TODO: implement estimate_base_frame")
+    return registration.average_frames(base_estimates)      # average all the guesses

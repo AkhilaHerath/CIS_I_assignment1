@@ -63,6 +63,11 @@ def test_register_points_rejects_degenerate_input():
     with pytest.raises(ValueError):
         registration.register_points([vct3(0, 0, 0), vct3(1, 0, 0)], [vct3(0, 0, 0), vct3(1, 0, 0)])
 
+def test_register_points_rejects_collinear():
+    a = [vct3(0, 0, 0), vct3(1, 0, 0), vct3(2, 0, 0), vct3(3, 0, 0)]
+    b = [vct3(0, 0, 0), vct3(1, 0, 0), vct3(2, 0, 0), vct3(3, 0, 0)]
+    with pytest.raises(ValueError):
+        registration.register_points(a, b)
 
 def test_average_frames_of_identical_frames():
     rng = np.random.default_rng(3)
@@ -108,21 +113,29 @@ def test_estimate_base_frame_on_synthetic_data():
 
 
 def test_planned_poses_are_visible_and_within_limits():
-    """TODO: write this test for your plan_calibration_poses."""
+    """this test for your plan_calibration_poses."""
     rob = simulation.create_robot("rob", Frame.eye(), seed=0)
     trk = simulation.create_tracker("trk", Frame(Rot('x', np.pi), vct3(900, 0, 1900)), seed=0)
-    markers = [vct3(70, 0, 0), vct3(-70, 0, 0), vct3(0, 70, 0), vct3(0, -70, 0), vct3(0, 0, 70), vct3(0, 0, -70)]
+    markers = [vct3(70, 0, 0), vct3(-70, 0, 0),
+               vct3(0, 70, 0), vct3(0, -70, 0),
+               vct3(0, 0, 70), vct3(0, 0, -70)]
+
     poses = workflow.plan_calibration_poses(rob, trk, markers, desired_accuracy=1e-3)
     assert len(poses) > 0
 
     for theta in poses:
+        # 6 joint values, all inside the joint limits
         assert len(theta) == 6
         assert rob.within_limits(theta)
-        F_world_ee = rob.F_rob * rob.fwd_kins(theta)
-        markers_world = []
+
+        # where the markers end up in the workspace
+        F_tool = rob.F_rob * rob.fwd_kins(theta)
+        points = []
         for a in markers:
-            markers_world.append(F_world_ee * a)
-        assert trk.is_visible(markers_world)
+            points.append(F_tool * a)
+
+        # the tracker must see all of them
+        assert trk.is_visible(points)
 
 
 def test_measure_home_offsets_matches_encoders():
@@ -163,8 +176,7 @@ def test_improved_inv_kins_round_trip():
 
 
 def test_fit_recovers_synthetic_parameters():
-    """TODO: write this test.
-
+    """
     Hint: generate CalibrationData from your own model with a known,
     non-zero parameter vector (no noise), fit from zero, and check that
     predict_in_tracker agrees with the generating model on new poses. Note that
@@ -175,26 +187,28 @@ def test_fit_recovers_synthetic_parameters():
     F_X = Frame(Rot('x', np.pi), vct3(900, 0, 1900))
     rng = np.random.default_rng(10)
 
-    # true model with known small errors
+    # make a robot with known errors
     truth = kinematics.ImprovedKinematics(rob, F_X)
-    true_params = 1e-3 * rng.normal(size=truth.params.shape)
-    true_params[6] = 0.0
-    truth.params = true_params
+    params = 1e-3 * rng.normal(size=truth.params.shape)
+    params[6] = 0.0          # this one is locked at 0 in the fit too
+    truth.params = params
 
-    # fake measurements from the true model
+    # make 60 fake readings from the true robot
     data = workflow.CalibrationData()
     for i in range(60):
         theta = random_theta(rng)
         data.thetas.append(theta)
         data.frames.append(truth.predict_in_tracker(theta))
 
-    # fit a fresh model starting from zero
+    # fit a new model starting from zero
     model = kinematics.ImprovedKinematics(rob, F_X)
     model.fit(data)
 
-    # on new poses, the fitted model should pedit the smae as the true one
+    # both models should give the same tool pose on the 10 new poses
     for i in range(10):
         theta = random_theta(rng)
-        angle, dist = metrics.frame_error(truth.predict_in_tracker(theta), model.predict_in_tracker(theta))
-        assert angle < 1e-8 
+        F_true = truth.predict_in_tracker(theta)
+        F_fit = model.predict_in_tracker(theta)
+        angle, dist = metrics.frame_error(F_true, F_fit)
+        assert angle < 1e-8
         assert dist < 1e-6
